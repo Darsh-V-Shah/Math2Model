@@ -51,3 +51,21 @@ The project will continue expanding with additional algorithms as their underlyi
 Math2Model is built around one principle:
 
 > **Don't just use the model. Understand the mathematics that makes the model work.**
+
+
+## Roadmap & Progress
+
+## Roadmap & Progress
+
+* [x] Linear Regression
+* [x] Logistic Regression
+* [ ] Polynomial Regression *(In Progress)*
+* [ ] Regularization
+* [ ] Support Vector Machines (SVM)
+* [ ] Neural Networks
+* [ ] K-Nearest Neighbors (KNN)
+* [ ] Decision Trees
+* [ ] Random Forests
+* [ ] K-Means Clustering
+* [ ] XGBoost
+
