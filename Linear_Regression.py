@@ -179,7 +179,7 @@ def gradient_descent(
     """
     Train the model using gradient descent.
 
-    Andrew Ng update equations:
+    update equations:
 
         w := w - alpha * dJ/dw
 
