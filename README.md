@@ -52,9 +52,6 @@ Math2Model is built around one principle:
 
 > **Don't just use the model. Understand the mathematics that makes the model work.**
 
-
-## Roadmap & Progress
-
 ## Roadmap & Progress
 
 * [x] Linear Regression
