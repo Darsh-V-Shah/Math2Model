@@ -54,15 +54,15 @@ Math2Model is built around one principle:
 
 ## Roadmap & Progress
 
-* [x] Linear Regression
-* [x] Logistic Regression
-* [ ] Polynomial Regression *(In Progress)*
-* [ ] Regularization
-* [ ] Support Vector Machines (SVM)
-* [ ] Neural Networks
-* [ ] K-Nearest Neighbors (KNN)
-* [ ] Decision Trees
-* [ ] Random Forests
-* [ ] K-Means Clustering
-* [ ] XGBoost
+- [x] Linear Regression
+- [x] Logistic Regression
+- [x] Naive Bayes — Email Spam Classifier
+- [ ] Polynomial Regression
+- [ ] SVM
+- [ ] Neural Networks
+- [ ] KNN
+- [ ] K-Means
+- [ ] Decision Trees
+- [ ] Random Forests
+- [ ] XGBoost
 
