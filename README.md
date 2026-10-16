@@ -58,6 +58,8 @@ Math2Model is built around one principle:
 - [x] Logistic Regression
 - [x] Naive Bayes — Email Spam Classifier
 - [x] Polynomial Regression
+- [x] L2 Regularization
+- [x] L1 Regularization
 - [ ] SVM
 - [ ] Neural Networks
 - [ ] KNN
