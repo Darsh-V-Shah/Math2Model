@@ -61,6 +61,7 @@ Math2Model is built around one principle:
 - [x] L2 Regularization
 - [x] L1 Regularization
 - [x] L1 vs L2 Regularization
+- [x] Solved California Housing Dataset using Polynomial Regression and L2 Regularization
 - [ ] SVM
 - [ ] Neural Networks
 - [ ] KNN
