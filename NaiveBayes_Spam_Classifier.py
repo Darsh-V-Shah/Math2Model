@@ -2,16 +2,9 @@ import math
 from collections import Counter
 
 
-# ============================================================
-# 1. TRAINING DATA
-# ============================================================
-
+# 70 spam + 100 ham, pre-labeled.
 emails = [
-
-    # =========================
-    # SPAM EMAILS - 70
-    # =========================
-
+    # spam
     ("free money", "Spam"),
     ("win prize", "Spam"),
     ("free prize", "Spam"),
@@ -83,11 +76,7 @@ emails = [
     ("free shopping voucher", "Spam"),
     ("you are a winner", "Spam"),
 
-
-    # =========================
-    # HAM EMAILS - 100
-    # =========================
-
+    # ham
     ("meeting tomorrow", "Ham"),
     ("project meeting", "Ham"),
     ("see you tomorrow", "Ham"),
@@ -193,419 +182,108 @@ emails = [
 ]
 
 
-# ============================================================
-# 2. PREPROCESSING
-# ============================================================
+# ------------------------------------------------------------
+# Naive Bayes helpers
+# ------------------------------------------------------------
 
 def tokenize(email):
-    """
-    Convert an email into a list of words.
+    return email.lower().split()
 
-    Example:
-        "Free Money" -> ["free", "money"]
-    """
-
-    email = email.lower()
-
-    # Simple tokenization:
-    words = email.split()
-
-    return words
-
-
-# ============================================================
-# 3. BUILD THE VOCABULARY
-# ============================================================
 
 def build_vocabulary(emails):
-    """
-    Create a set containing every unique word
-    appearing in the training emails.
-    """
+    vocab = set()
+    for text, _ in emails:
+        vocab.update(tokenize(text))
+    return vocab
 
-    vocabulary = set()
-
-    for email, label in emails:
-
-        words = tokenize(email)
-
-        for word in words:
-            vocabulary.add(word)
-
-    return vocabulary
-
-
-# ============================================================
-# 4. COUNT WORDS FOR EACH CLASS
-# ============================================================
 
 def count_words_by_class(emails):
-    """
-    Count how many times each word appears in Spam
-    and Ham emails.
-    """
+    spam_counts = Counter()
+    ham_counts = Counter()
+    spam_total = 0
+    ham_total = 0
 
-    spam_word_counts = Counter()
-    ham_word_counts = Counter()
+    for text, label in emails:
+        for word in tokenize(text):
+            if label == "Spam":
+                spam_counts[word] += 1
+                spam_total += 1
+            elif label == "Ham":
+                ham_counts[word] += 1
+                ham_total += 1
 
-    spam_total_words = 0
-    ham_total_words = 0
+    return spam_counts, ham_counts, spam_total, ham_total
 
-    for email, label in emails:
-
-        words = tokenize(email)
-
-        if label == "Spam":
-
-            for word in words:
-                spam_word_counts[word] += 1
-                spam_total_words += 1
-
-        elif label == "Ham":
-
-            for word in words:
-                ham_word_counts[word] += 1
-                ham_total_words += 1
-
-    return (
-        spam_word_counts,
-        ham_word_counts,
-        spam_total_words,
-        ham_total_words
-    )
-
-
-# ============================================================
-# 5. CALCULATE CLASS PRIORS
-# ============================================================
 
 def calculate_priors(emails):
-    """
-    Calculate:
-
-        P(Spam)
-        P(Ham)
-    """
-
-    total_emails = len(emails)
-
-    spam_emails = 0
-    ham_emails = 0
-
-    for email, label in emails:
-
-        if label == "Spam":
-            spam_emails += 1
-
-        elif label == "Ham":
-            ham_emails += 1
-
-    spam_prior = spam_emails / total_emails
-    ham_prior = ham_emails / total_emails
-
-    return spam_prior, ham_prior
+    total = len(emails)
+    spam = sum(1 for _, label in emails if label == "Spam")
+    ham = sum(1 for _, label in emails if label == "Ham")
+    return spam / total, ham / total
 
 
-# ============================================================
-# 6. CALCULATE WORD PROBABILITIES
-# ============================================================
-
-def calculate_word_probabilities(
-        word_counts,
-        total_words,
-        vocabulary_size,
-        alpha=1
-):
-    """
-    Calculate:
-
-        P(word | class)
-
-    using Laplace smoothing.
-
-    Formula:
-
-        P(word | class) =
-        (count(word, class) + alpha)
-        --------------------------------
-        total_words + alpha * V
-
-    where:
-
-        V = vocabulary size
-        alpha = smoothing parameter
-    """
-
-    probabilities = {}
-
-    denominator = total_words + alpha * vocabulary_size
-
-    for word, count in word_counts.items():
-
-        probability = (count + alpha) / denominator
-
-        probabilities[word] = probability
-
-    return probabilities
+def calculate_word_probabilities(word_counts, total_words, vocab_size, alpha=1):
+    denom = total_words + alpha * vocab_size
+    return {word: (count + alpha) / denom for word, count in word_counts.items()}
 
 
-# ============================================================
-# 7. GET PROBABILITY FOR A WORD
-# ============================================================
-
-def get_word_probability(
-        word,
-        word_counts,
-        total_words,
-        vocabulary_size,
-        alpha=1
-):
-    """
-    Return P(word | class).
-
-    Notice that we also need to handle words that
-    never appeared in that class.
-
-    Example:
-
-        P(meeting | Spam)
-
-    meeting appeared 0 times in Spam.
-
-    Laplace smoothing gives:
-
-        (0 + 1) / (total_words + V)
-    """
-
+def get_word_probability(word, word_counts, total_words, vocab_size, alpha=1):
+    # Laplace smoothing: unseen words still get a small non-zero chance.
     count = word_counts.get(word, 0)
-
-    denominator = total_words + alpha * vocabulary_size
-
-    probability = (count + alpha) / denominator
-
-    return probability
+    return (count + alpha) / (total_words + alpha * vocab_size)
 
 
-# ============================================================
-# 8. PREDICT EMAIL
-# ============================================================
-
-def predict(
-        email,
-        spam_prior,
-        ham_prior,
-        spam_word_counts,
-        ham_word_counts,
-        spam_total_words,
-        ham_total_words,
-        vocabulary_size,
-        alpha=1
-):
-    """
-    Predict whether an email is Spam or Ham.
-
-    We use log probabilities:
-
-        log P(Class)
-        +
-        sum(log P(word | Class))
-
-    This prevents numerical underflow when emails
-    contain many words.
-    """
-
+def predict(email, spam_prior, ham_prior, spam_counts, ham_counts,
+            spam_total, ham_total, vocab_size, alpha=1):
+    # Compare log P(Spam) + sum log P(w|Spam) against the Ham equivalent.
+    # Logs because multiplying dozens of sub-1 probabilities underflows fast.
     words = tokenize(email)
 
-    # --------------------------------------------------------
-    # Spam score
-    # --------------------------------------------------------
-
-    spam_log_score = math.log(spam_prior)
-
+    spam_log = math.log(spam_prior)
+    ham_log = math.log(ham_prior)
     for word in words:
+        spam_log += math.log(get_word_probability(word, spam_counts, spam_total, vocab_size, alpha))
+        ham_log += math.log(get_word_probability(word, ham_counts, ham_total, vocab_size, alpha))
 
-        probability = get_word_probability(
-            word,
-            spam_word_counts,
-            spam_total_words,
-            vocabulary_size,
-            alpha
-        )
+    return ("Spam" if spam_log > ham_log else "Ham"), spam_log, ham_log
 
-        spam_log_score += math.log(probability)
-
-    # --------------------------------------------------------
-    # Ham score
-    # --------------------------------------------------------
-
-    ham_log_score = math.log(ham_prior)
-
-    for word in words:
-
-        probability = get_word_probability(
-            word,
-            ham_word_counts,
-            ham_total_words,
-            vocabulary_size,
-            alpha
-        )
-
-        ham_log_score += math.log(probability)
-
-    # --------------------------------------------------------
-    # Compare scores
-    # --------------------------------------------------------
-
-    if spam_log_score > ham_log_score:
-        prediction = "Spam"
-
-    else:
-        prediction = "Ham"
-
-    return prediction, spam_log_score, ham_log_score
-
-
-# ============================================================
-# 9. MAIN PROGRAM
-# ============================================================
 
 # ------------------------------------------------------------
-# Build vocabulary
+# Run it
 # ------------------------------------------------------------
 
 vocabulary = build_vocabulary(emails)
-
-"""print("=" * 60)
-print("VOCABULARY")
-print("=" * 60)
-
-print(vocabulary)
-print()"""
-
 print("Vocabulary size =", len(vocabulary))
 
+spam_word_counts, ham_word_counts, spam_total_words, ham_total_words = \
+    count_words_by_class(emails)
 
-# ------------------------------------------------------------
-# Count words
-# ------------------------------------------------------------
-
-(
-    spam_word_counts,
-    ham_word_counts,
-    spam_total_words,
-    ham_total_words
-) = count_words_by_class(emails)
-
-
-print()
-print("=" * 60)
-print("WORD COUNTS")
-print("=" * 60)
-
-print("\nSpam word counts:")
-print(spam_word_counts)
-
-print("\nHam word counts:")
-print(ham_word_counts)
-
+print("\nSpam word counts:", spam_word_counts)
+print("\nHam word counts:", ham_word_counts)
 print("\nTotal Spam words =", spam_total_words)
 print("Total Ham words =", ham_total_words)
 
-
-# ------------------------------------------------------------
-# Calculate priors
-# ------------------------------------------------------------
-
 spam_prior, ham_prior = calculate_priors(emails)
+print("\nP(Spam) =", spam_prior)
+print("P(Ham)  =", ham_prior)
 
-print()
-print("=" * 60)
-print("CLASS PRIORS")
-print("=" * 60)
-
-print("P(Spam) =", spam_prior)
-print("P(Ham)   =", ham_prior)
-
-
-# ------------------------------------------------------------
-# Calculate word probabilities
-# ------------------------------------------------------------
-
+# Computed for completeness; predict() looks words up on the fly.
 spam_probabilities = calculate_word_probabilities(
-    spam_word_counts,
-    spam_total_words,
-    len(vocabulary)
-)
-
+    spam_word_counts, spam_total_words, len(vocabulary))
 ham_probabilities = calculate_word_probabilities(
-    ham_word_counts,
-    ham_total_words,
-    len(vocabulary)
-)
-
-
-"""print()
-print("=" * 60)
-print("WORD PROBABILITIES")
-print("=" * 60)
-
-print("\nSpam probabilities:")
-
-for word in sorted(vocabulary):
-
-    probability = get_word_probability(
-        word,
-        spam_word_counts,
-        spam_total_words,
-        len(vocabulary)
-    )
-
-    print(f"P({word} | Spam) = {probability:.4f}")
-
-
-print("\nHam probabilities:")
-
-for word in sorted(vocabulary):
-
-    probability = get_word_probability(
-        word,
-        ham_word_counts,
-        ham_total_words,
-        len(vocabulary)
-    )
-
-    print(f"P({word} | Ham) = {probability:.4f}")"""
-
-
-# ============================================================
-# 10. TEST EMAIL
-# ============================================================
+    ham_word_counts, ham_total_words, len(vocabulary))
 
 test_email = "See you at the meeting tomorrow."
 
-print()
-print("=" * 60)
-print("PREDICTION")
-print("=" * 60)
-
-print("Test email:", test_email)
-
-
 prediction, spam_score, ham_score = predict(
     test_email,
-    spam_prior,
-    ham_prior,
-    spam_word_counts,
-    ham_word_counts,
-    spam_total_words,
-    ham_total_words,
-    len(vocabulary)
+    spam_prior, ham_prior,
+    spam_word_counts, ham_word_counts,
+    spam_total_words, ham_total_words,
+    len(vocabulary),
 )
 
-
-print()
+print("\nTest email:", test_email)
 print("Spam log score =", spam_score)
 print("Ham log score  =", ham_score)
-
-print()
-print("Prediction =", prediction)
+print("Prediction     =", prediction)
