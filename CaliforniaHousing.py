@@ -1,37 +1,25 @@
-
 """
-POLYNOMIAL HOUSING PRICE PREDICTOR
-==================================
-Stage A:
-- Load and clean a real-world housing dataset
-- Train/validation/test split
-- Standardization
-- Polynomial feature expansion from scratch
-- Linear regression with L2 regularization
-- Gradient descent from scratch
-- Hyperparameter selection
-- RMSE, MAE, R² evaluation
+Polynomial regression on the California housing dataset.
 
-Stage B:
-- Actual vs predicted visualization
-- Residual visualization
+Everything is from scratch — NumPy for the math, pandas for I/O,
+matplotlib for plots. No scikit-learn.
 
-No scikit-learn is used.
-Uses Polynomial Regression with L2 Regularization. Loop to find the ideal hyperparameters.
+Pipeline: standardize → expand to polynomial features → standardize again →
+L2-regularized linear regression via gradient descent.
 
-DATASET: California Housing
+A grid of (degree, lambda) pairs is scored on a validation split; the winner
+gets retrained on train+val and evaluated once on test.
 """
+
+from itertools import combinations_with_replacement
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
 from matplotlib.widgets import Button, TextBox
 
 
-# ============================================================
-# 1. CONFIGURATION
-# ============================================================
+# ----- Config -----
 
 DATASET_PATH = "housing.csv"
 
@@ -41,7 +29,7 @@ FEATURES = [
     "total_rooms",
     "households",
     "latitude",
-    "longitude"
+    "longitude",
 ]
 
 TARGET = "median_house_value"
@@ -54,88 +42,48 @@ ITERATIONS = 600
 RANDOM_SEED = 42
 
 
-# ============================================================
-# 2. LOAD DATASET
-# ============================================================
+# ----- Data loading -----
 
 def load_dataset(path):
-    """
-    Load the CSV and retain the numerical features needed
-    for this project.
-    """
-
     df = pd.read_csv(path)
 
-    required_columns = FEATURES + [TARGET]
+    required = FEATURES + [TARGET]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns in dataset: {missing}")
 
-    missing_columns = [
-        col for col in required_columns
-        if col not in df.columns
-    ]
-
-    if missing_columns:
-        raise ValueError(
-            f"Missing columns in dataset: {missing_columns}"
-        )
-
-    df = df[required_columns]
-    df = df.replace([np.inf, -np.inf], np.nan)
-    df = df.dropna()
+    df = df[required].replace([np.inf, -np.inf], np.nan).dropna()
 
     X = df[FEATURES].to_numpy(dtype=float)
     y = df[TARGET].to_numpy(dtype=float)
 
-    print("\n========== DATASET ==========")
-    print("Usable samples:", len(X))
-    print("Original features:", X.shape[1])
-    print("Target:", TARGET)
-
+    print(f"\nLoaded {len(X)} usable rows, {X.shape[1]} features.")
     return X, y
 
 
-# ============================================================
-# 3. TRAIN / VALIDATION / TEST SPLIT
-# ============================================================
-
 def split_dataset(X, y, seed=42):
-    """
-    70% training
-    15% validation
-    15% testing
-
-    Training:
-        Learns model parameters.
-
-    Validation:
-        Selects polynomial degree and lambda.
-
-    Testing:
-        Evaluates the final selected model.
-    """
-
+    # 70/15/15 train/val/test.
     rng = np.random.default_rng(seed)
-
     indices = rng.permutation(len(X))
 
     train_end = int(0.70 * len(X))
-    validation_end = int(0.85 * len(X))
+    val_end = int(0.85 * len(X))
 
     train_idx = indices[:train_end]
-    validation_idx = indices[train_end:validation_end]
-    test_idx = indices[validation_end:]
+    val_idx = indices[train_end:val_end]
+    test_idx = indices[val_end:]
 
     return (
         X[train_idx], y[train_idx],
-        X[validation_idx], y[validation_idx],
-        X[test_idx], y[test_idx]
+        X[val_idx], y[val_idx],
+        X[test_idx], y[test_idx],
     )
 
 
-# ============================================================
-# 4. STANDARDIZATION
-# ============================================================
+# ----- Preprocessing -----
 
 class Standardizer:
+    """Per-column zero-mean unit-variance scaling."""
 
     def __init__(self):
         self.mean = None
@@ -144,25 +92,18 @@ class Standardizer:
     def fit(self, X):
         self.mean = np.mean(X, axis=0)
         self.std = np.std(X, axis=0)
-
-        # Prevent division by zero.
         self.std[self.std < 1e-12] = 1.0
-
         return self
 
     def transform(self, X):
         return (X - self.mean) / self.std
 
     def fit_transform(self, X):
-        self.fit(X)
-        return self.transform(X)
+        return self.fit(X).transform(X)
 
-
-# ============================================================
-# 5. POLYNOMIAL FEATURE EXPANSION FROM SCRATCH
-# ============================================================
 
 class PolynomialFeatures:
+    """Expand X into all monomials of total degree 1..degree."""
 
     def __init__(self, degree):
         self.degree = degree
@@ -171,88 +112,42 @@ class PolynomialFeatures:
         self.feature_names = None
 
     def fit(self, X):
-        """
-        Generate feature-index combinations.
-
-        For two variables x1 and x2, degree 2 generates:
-
-        x1, x2, x1², x1*x2, x2²
-
-        Degree 3 adds cubic terms and their interactions.
-        """
-
-        from itertools import combinations_with_replacement
-
         self.n_features = X.shape[1]
         self.combinations = []
         self.feature_names = []
 
         for power in range(1, self.degree + 1):
-
-            for combo in combinations_with_replacement(
-                range(self.n_features), power
-            ):
-
+            for combo in combinations_with_replacement(range(self.n_features), power):
                 self.combinations.append(combo)
 
+                # Build a human-readable name, e.g. median_income*latitude^2.
                 counts = {}
+                for idx in combo:
+                    counts[idx] = counts.get(idx, 0) + 1
 
-                for index in combo:
-                    counts[index] = counts.get(index, 0) + 1
-
-                name_parts = []
-
-                for index in sorted(counts):
-
-                    feature = FEATURES[index]
-                    exponent = counts[index]
-
-                    if exponent == 1:
-                        name_parts.append(feature)
-                    else:
-                        name_parts.append(
-                            f"{feature}^{exponent}"
-                        )
-
-                self.feature_names.append(
-                    "*".join(name_parts)
-                )
+                parts = []
+                for idx in sorted(counts):
+                    feature = FEATURES[idx]
+                    exp = counts[idx]
+                    parts.append(feature if exp == 1 else f"{feature}^{exp}")
+                self.feature_names.append("*".join(parts))
 
         return self
 
     def transform(self, X):
-        """
-        Calculate each polynomial term using NumPy.
-        """
-
-        columns = []
-
-        for combo in self.combinations:
-
-            column = np.prod(X[:, combo], axis=1)
-
-            columns.append(column)
-
+        columns = [np.prod(X[:, combo], axis=1) for combo in self.combinations]
         return np.column_stack(columns)
 
     def fit_transform(self, X):
-        self.fit(X)
-        return self.transform(X)
+        return self.fit(X).transform(X)
 
 
-# ============================================================
-# 6. LINEAR REGRESSION WITH L2 REGULARIZATION
-# ============================================================
+# ----- Model -----
 
 class L2LinearRegression:
+    """Linear regression with L2 penalty, trained by gradient descent."""
 
-    def __init__(
-        self,
-        learning_rate=0.03,
-        iterations=600,
-        lambda_=100.0
-    ):
-
+    def __init__(self, learning_rate=0.03, iterations=600, lambda_=100.0):
         self.learning_rate = learning_rate
         self.iterations = iterations
         self.lambda_ = lambda_
@@ -261,110 +156,49 @@ class L2LinearRegression:
         self.b = 0.0
         self.cost_history = []
 
-    # --------------------------------------------------------
-    # Prediction
-    # --------------------------------------------------------
-
     def predict(self, X):
-
         return X @ self.w + self.b
 
-    # --------------------------------------------------------
-    # Cost function
-    # --------------------------------------------------------
-
     def compute_cost(self, X, y):
-
         m = X.shape[0]
-
-        predictions = self.predict(X)
-        errors = predictions - y
-
+        errors = self.predict(X) - y
         data_cost = np.sum(errors ** 2) / (2 * m)
-
-        l2_penalty = (
-            self.lambda_
-            * np.sum(self.w ** 2)
-            / (2 * m)
-        )
-
+        l2_penalty = self.lambda_ * np.sum(self.w ** 2) / (2 * m)
         return data_cost + l2_penalty
 
-    # --------------------------------------------------------
-    # Gradient calculation
-    # --------------------------------------------------------
-
     def compute_gradient(self, X, y):
-
         m = X.shape[0]
-
-        predictions = self.predict(X)
-        errors = predictions - y
-
-        # Gradient of ordinary squared-error cost.
-        dj_dw = (X.T @ errors) / m
-
-        # Gradient of L2 penalty.
-        dj_dw += (self.lambda_ / m) * self.w
-
-        # Bias is NOT regularized.
-        dj_db = np.sum(errors) / m
-
+        errors = self.predict(X) - y
+        dj_dw = (X.T @ errors) / m + (self.lambda_ / m) * self.w
+        dj_db = np.sum(errors) / m  # bias is never regularized
         return dj_dw, dj_db
 
-    # --------------------------------------------------------
-    # Gradient descent
-    # --------------------------------------------------------
-
     def fit(self, X, y, verbose=False):
-
-        m, n = X.shape
-
+        _, n = X.shape
         self.w = np.zeros(n)
         self.b = 0.0
-
         self.cost_history = []
 
         for iteration in range(self.iterations):
-
             dj_dw, dj_db = self.compute_gradient(X, y)
-
             self.w -= self.learning_rate * dj_dw
             self.b -= self.learning_rate * dj_db
 
             if iteration % 50 == 0:
-
                 cost = self.compute_cost(X, y)
-
                 self.cost_history.append(cost)
-
                 if verbose and iteration % 100 == 0:
-
-                    print(
-                        f"Iteration {iteration:4d} | "
-                        f"Cost: {cost:.6f}"
-                    )
+                    print(f"  iter {iteration:4d}  cost {cost:.6f}")
 
         return self
 
 
-# ============================================================
-# 7. COMPLETE MODEL PIPELINE
-# ============================================================
-
 class HousingPipeline:
+    """Standardize → expand → standardize → L2 regression → unscale target."""
 
-    def __init__(
-        self,
-        degree,
-        lambda_,
-        learning_rate=0.03,
-        iterations=600
-    ):
-
+    def __init__(self, degree, lambda_, learning_rate=0.03, iterations=600):
         self.degree = degree
         self.lambda_ = lambda_
-
         self.learning_rate = learning_rate
         self.iterations = iterations
 
@@ -374,473 +208,219 @@ class HousingPipeline:
 
         self.target_mean = None
         self.target_std = None
-
         self.model = None
 
     def fit(self, X, y, verbose=False):
-
-        # Step 1: Scale original features.
         X_scaled = self.input_scaler.fit_transform(X)
-
-        # Step 2: Generate polynomial terms.
         X_poly = self.polynomial.fit_transform(X_scaled)
-
-        # Step 3: Scale expanded polynomial features.
         X_poly_scaled = self.poly_scaler.fit_transform(X_poly)
 
-        # Step 4: Scale target for numerical stability.
+        # Scaling the target keeps the learning rate usable across datasets.
         self.target_mean = np.mean(y)
-        self.target_std = np.std(y)
+        self.target_std = np.std(y) or 1.0
+        y_scaled = (y - self.target_mean) / self.target_std
 
-        if self.target_std < 1e-12:
-            self.target_std = 1.0
-
-        y_scaled = (
-            y - self.target_mean
-        ) / self.target_std
-
-        # Step 5: Train regularized regression.
         self.model = L2LinearRegression(
             learning_rate=self.learning_rate,
             iterations=self.iterations,
-            lambda_=self.lambda_
+            lambda_=self.lambda_,
         )
-
-        self.model.fit(
-            X_poly_scaled,
-            y_scaled,
-            verbose=verbose
-        )
-
+        self.model.fit(X_poly_scaled, y_scaled, verbose=verbose)
         return self
 
     def predict(self, X):
-
-        # Apply exactly the same transformations learned
-        # during training.
-
         X_scaled = self.input_scaler.transform(X)
-
         X_poly = self.polynomial.transform(X_scaled)
-
         X_poly_scaled = self.poly_scaler.transform(X_poly)
-
-        predictions_scaled = self.model.predict(X_poly_scaled)
-
-        # Return predictions in original dollar units.
-        return (
-            predictions_scaled * self.target_std
-            + self.target_mean
-        )
+        pred_scaled = self.model.predict(X_poly_scaled)
+        return pred_scaled * self.target_std + self.target_mean
 
 
-# ============================================================
-# 8. EVALUATION METRICS
-# ============================================================
+# ----- Metrics -----
 
 def mse(y_true, y_pred):
-
     return np.mean((y_true - y_pred) ** 2)
 
 
 def rmse(y_true, y_pred):
-
     return np.sqrt(mse(y_true, y_pred))
 
 
 def mae(y_true, y_pred):
-
     return np.mean(np.abs(y_true - y_pred))
 
 
 def r2_score(y_true, y_pred):
-
     ss_res = np.sum((y_true - y_pred) ** 2)
-
-    ss_total = np.sum(
-        (y_true - np.mean(y_true)) ** 2
-    )
-
-    if ss_total == 0:
+    ss_tot = np.sum((y_true - np.mean(y_true)) ** 2)
+    if ss_tot == 0:
         return 0.0
+    return 1 - ss_res / ss_tot
 
-    return 1 - ss_res / ss_total
 
+# ----- Grid search -----
 
-# ============================================================
-# 9. MODEL SELECTION
-# ============================================================
-
-def select_best_model(
-    X_train,
-    y_train,
-    X_validation,
-    y_validation
-):
-
+def select_best_model(X_train, y_train, X_val, y_val):
     results = []
-    best_model = None
+    best_config = None
     best_rmse = float("inf")
 
-    print("\n========== MODEL SELECTION ==========")
-
     for degree in POLYNOMIAL_DEGREES:
-
         for lambda_ in L2_STRENGTHS:
-
-            print(
-                f"\nTraining degree={degree}, "
-                f"lambda={lambda_}"
-            )
+            print(f"\nTrying degree={degree}, lambda={lambda_}")
 
             model = HousingPipeline(
                 degree=degree,
                 lambda_=lambda_,
                 learning_rate=LEARNING_RATE,
-                iterations=ITERATIONS
+                iterations=ITERATIONS,
             )
-
             model.fit(X_train, y_train)
 
-            predictions = model.predict(X_validation)
+            preds = model.predict(X_val)
+            val_rmse = rmse(y_val, preds)
+            val_mae = mae(y_val, preds)
+            val_r2 = r2_score(y_val, preds)
 
-            validation_rmse = rmse(
-                y_validation,
-                predictions
-            )
-
-            validation_r2 = r2_score(
-                y_validation,
-                predictions
-            )
-
-            validation_mae = mae(
-                y_validation,
-                predictions
-            )
-
-            feature_count = len(
-                model.polynomial.feature_names
-            )
-
-            print(
-                f"Validation RMSE: ${validation_rmse:,.2f}"
-            )
-
-            print(
-                f"Validation MAE:  ${validation_mae:,.2f}"
-            )
-
-            print(
-                f"Validation R²:   {validation_r2:.4f}"
-            )
+            print(f"  val RMSE ${val_rmse:,.2f}   MAE ${val_mae:,.2f}   R² {val_r2:.4f}")
 
             results.append({
                 "degree": degree,
                 "lambda": lambda_,
-                "features": feature_count,
-                "validation_RMSE": validation_rmse,
-                "validation_MAE": validation_mae,
-                "validation_R2": validation_r2
+                "features": len(model.polynomial.feature_names),
+                "validation_RMSE": val_rmse,
+                "validation_MAE": val_mae,
+                "validation_R2": val_r2,
             })
 
-            if validation_rmse < best_rmse:
+            if val_rmse < best_rmse:
+                best_rmse = val_rmse
+                best_config = {"degree": degree, "lambda": lambda_}
 
-                best_rmse = validation_rmse
-
-                best_model = {
-                    "degree": degree,
-                    "lambda": lambda_
-                }
-
-    results_df = pd.DataFrame(results)
-
-    results_df = results_df.sort_values(
-        "validation_RMSE"
-    )
-
-    print("\n========== VALIDATION RESULTS ==========")
+    results_df = pd.DataFrame(results).sort_values("validation_RMSE")
+    print("\nValidation results, sorted by RMSE:")
     print(results_df.to_string(index=False))
 
-    return best_model, results_df
+    return best_config, results_df
 
 
-# ============================================================
-# 10. VISUALIZATIONS
-# ============================================================
+# ----- Plots -----
 
 def show_evaluation_plots(y_true, predictions):
-
     residuals = y_true - predictions
 
-    # Actual versus predicted.
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-    axes[0].scatter(
-        y_true,
-        predictions,
-        alpha=0.25,
-        s=10
-    )
-
-    low = min(np.min(y_true), np.min(predictions))
-    high = max(np.max(y_true), np.max(predictions))
-
-    axes[0].plot(
-        [low, high],
-        [low, high],
-        linestyle="--"
-    )
-
+    axes[0].scatter(y_true, predictions, alpha=0.25, s=10)
+    lo = min(np.min(y_true), np.min(predictions))
+    hi = max(np.max(y_true), np.max(predictions))
+    axes[0].plot([lo, hi], [lo, hi], linestyle="--")
     axes[0].set_xlabel("Actual house value ($)")
     axes[0].set_ylabel("Predicted house value ($)")
     axes[0].set_title("Actual vs Predicted")
 
-    # Residual plot.
-    axes[1].scatter(
-        predictions,
-        residuals,
-        alpha=0.25,
-        s=10
-    )
-
+    axes[1].scatter(predictions, residuals, alpha=0.25, s=10)
     axes[1].axhline(0, linestyle="--")
-
     axes[1].set_xlabel("Predicted house value ($)")
     axes[1].set_ylabel("Residual ($)")
-    axes[1].set_title("Residual Analysis")
+    axes[1].set_title("Residuals")
 
     plt.tight_layout()
     plt.show()
 
 
-# ============================================================
-# 11. INTERACTIVE PREDICTION INTERFACE
-# ============================================================
+# ----- Interactive UI -----
 
 def interactive_prediction(model):
-
-    print("\n========== INTERACTIVE PREDICTION ==========")
-    print("Enter housing features in their original units.")
-    print("Close the prediction window to finish.")
+    print("\nOpening interactive predictor. Close the window when done.")
 
     fig = plt.figure(figsize=(10, 7))
+    fig.suptitle("California Housing Price Predictor", fontsize=16)
 
-    fig.suptitle(
-        "California Housing Price Predictor",
-        fontsize=16
-    )
-
-    input_boxes = {}
-
-    default_values = {
+    defaults = {
         "median_income": "5.0",
         "housing_median_age": "25",
         "total_rooms": "2000",
         "households": "500",
         "latitude": "34.0",
-        "longitude": "-118.0"
+        "longitude": "-118.0",
     }
 
-    for index, feature in enumerate(FEATURES):
-
-        row = index // 2
-        col = index % 2
-
+    input_boxes = {}
+    for i, feature in enumerate(FEATURES):
+        row, col = i // 2, i % 2
         left = 0.08 + col * 0.48
         bottom = 0.77 - row * 0.19
 
-        fig.text(
-            left,
-            bottom + 0.07,
-            feature.replace("_", " ").title()
-        )
-
-        ax_box = fig.add_axes([
-            left,
-            bottom,
-            0.36,
-            0.055
-        ])
-
-        input_boxes[feature] = TextBox(
-            ax_box,
-            "",
-            initial=default_values[feature]
-        )
+        fig.text(left, bottom + 0.07, feature.replace("_", " ").title())
+        ax = fig.add_axes([left, bottom, 0.36, 0.055])
+        input_boxes[feature] = TextBox(ax, "", initial=defaults[feature])
 
     result_text = fig.text(
-        0.08,
-        0.14,
-        "Enter values and click Predict.",
-        fontsize=12
+        0.08, 0.14, "Enter values and click Predict.", fontsize=12
     )
 
-    button_ax = fig.add_axes([
-        0.68,
-        0.055,
-        0.22,
-        0.07
-    ])
+    button_ax = fig.add_axes([0.68, 0.055, 0.22, 0.07])
+    predict_button = Button(button_ax, "Predict")
 
-    predict_button = Button(
-        button_ax,
-        "Predict"
-    )
-
-    def on_predict(event):
-
+    def on_predict(_event):
         try:
-
-            values = []
-
-            for feature in FEATURES:
-
-                value = float(
-                    input_boxes[feature].text
-                )
-
-                values.append(value)
-
-            X_input = np.array(
-                [values],
-                dtype=float
-            )
-
-            prediction = model.predict(X_input)[0]
-
-            result_text.set_text(
-                f"Predicted median house value: "
-                f"${prediction:,.0f}"
-            )
-
-            fig.canvas.draw_idle()
-
+            values = [float(input_boxes[f].text) for f in FEATURES]
+            X_input = np.array([values], dtype=float)
+            pred = model.predict(X_input)[0]
+            result_text.set_text(f"Predicted median house value: ${pred:,.0f}")
         except ValueError:
-
-            result_text.set_text(
-                "Error: enter a valid number in every field."
-            )
-
-            fig.canvas.draw_idle()
+            result_text.set_text("Error: enter a valid number in every field.")
+        fig.canvas.draw_idle()
 
     predict_button.on_clicked(on_predict)
-
     plt.show()
 
 
-# ============================================================
-# 12. MAIN PROGRAM
-# ============================================================
+# ----- Main -----
 
 def main():
-
-    # Load data.
     X, y = load_dataset(DATASET_PATH)
 
-    # Split data.
-    (
-        X_train,
-        y_train,
-        X_validation,
-        y_validation,
-        X_test,
-        y_test
-    ) = split_dataset(X, y, RANDOM_SEED)
-
-    print("\n========== DATA SPLIT ==========")
-    print("Training samples:   ", len(X_train))
-    print("Validation samples: ", len(X_validation))
-    print("Test samples:       ", len(X_test))
-
-    # Select degree and lambda using validation data only.
-    best_config, results = select_best_model(
-        X_train,
-        y_train,
-        X_validation,
-        y_validation
+    X_train, y_train, X_val, y_val, X_test, y_test = split_dataset(
+        X, y, RANDOM_SEED
     )
+    print(f"Train {len(X_train)} | Val {len(X_val)} | Test {len(X_test)}")
 
-    print("\n========== SELECTED MODEL ==========")
-    print("Polynomial degree:", best_config["degree"])
-    print("L2 strength:", best_config["lambda"])
+    # Pick degree and lambda using validation data only.
+    best_config, results = select_best_model(X_train, y_train, X_val, y_val)
+    print(f"\nSelected: degree={best_config['degree']}, lambda={best_config['lambda']}")
 
-    # Refit the selected configuration using training
-    # and validation samples together.
-    X_trainval = np.vstack([
-        X_train,
-        X_validation
-    ])
-
-    y_trainval = np.concatenate([
-        y_train,
-        y_validation
-    ])
+    # Refit on train + val with the chosen config.
+    X_trainval = np.vstack([X_train, X_val])
+    y_trainval = np.concatenate([y_train, y_val])
 
     final_model = HousingPipeline(
         degree=best_config["degree"],
         lambda_=best_config["lambda"],
         learning_rate=LEARNING_RATE,
-        iterations=ITERATIONS
+        iterations=ITERATIONS,
     )
+    print("\nTraining final model on train + val...")
+    final_model.fit(X_trainval, y_trainval, verbose=True)
 
-    print("\nTraining final model...")
-
-    final_model.fit(
-        X_trainval,
-        y_trainval,
-        verbose=True
-    )
-
-    # Evaluate the test set after model selection.
+    # Touch the test set exactly once.
     test_predictions = final_model.predict(X_test)
 
-    print("\n========== FINAL TEST RESULTS ==========")
+    print("\nTest results")
+    print(f"  RMSE ${rmse(y_test, test_predictions):,.2f}")
+    print(f"  MAE  ${mae(y_test, test_predictions):,.2f}")
+    print(f"  R²   {r2_score(y_test, test_predictions):.4f}")
+    print(f"  Features after expansion: {len(final_model.polynomial.feature_names)}")
 
-    print(
-        f"Test RMSE: ${rmse(y_test, test_predictions):,.2f}"
-    )
+    print("\nFirst five predictions:")
+    for actual, predicted in zip(y_test[:5], test_predictions[:5]):
+        print(f"  actual ${actual:,.0f} | predicted ${predicted:,.0f}")
 
-    print(
-        f"Test MAE:  ${mae(y_test, test_predictions):,.2f}"
-    )
-
-    print(
-        f"Test R²:   {r2_score(y_test, test_predictions):.4f}"
-    )
-
-    print(
-        "Expanded feature count:",
-        len(final_model.polynomial.feature_names)
-    )
-
-    print("\nFirst five test predictions:")
-
-    for actual, predicted in zip(
-        y_test[:5],
-        test_predictions[:5]
-    ):
-
-        print(
-            f"Actual: ${actual:,.0f} | "
-            f"Predicted: ${predicted:,.0f}"
-        )
-
-    # Show model-selection comparison.
-    results.to_csv(
-        "model_comparison.csv",
-        index=False
-    )
-
+    results.to_csv("model_comparison.csv", index=False)
     print("\nSaved model comparison to model_comparison.csv")
 
-    # Stage B: visualizations.
-    show_evaluation_plots(
-        y_test,
-        test_predictions
-    )
-
-    # Stage B: interactive prediction.
+    show_evaluation_plots(y_test, test_predictions)
     interactive_prediction(final_model)
 
 
